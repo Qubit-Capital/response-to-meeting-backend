@@ -23,6 +23,6 @@ jobs:
         chmod 600 server_key.pem
         ssh -o StrictHostKeyChecking=no -i server_key.pem ${USER}@${HOST} '
           cd /home/azureuser/qubit_app/response_to_meeting_api/staging/response-to-meeting-backend &&
-          git pull origin develop &&
+          git pull origin development &&
           sudo systemctl restart fastapi-response-to-meeting_staging'
         rm -f server_key.pem
