@@ -1,0 +1,28 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ development ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Install SSH Client
+      run: sudo apt-get install openssh-client -y
+    
+    - name: Deploy to Staging
+      env:
+        PEM_FILE: ${{ secrets.SERVER_PEM_FILE }}
+        HOST: ${{ secrets.SERVER_IP }}
+        USER: azureuser
+      run: |
+        echo "$PEM_FILE" > server_key.pem
+        chmod 600 server_key.pem
+        ssh -o StrictHostKeyChecking=no -i server_key.pem ${USER}@${HOST} '
+          cd /home/azureuser/qubit_app/response_to_meeting_api/staging/response-to-meeting-backend &&
+          git pull origin develop &&
+          sudo systemctl restart fastapi-response-to-meeting_staging'
+        rm -f server_key.pem
