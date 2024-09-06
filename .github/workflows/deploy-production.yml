@@ -26,3 +26,4 @@ jobs:
           git pull origin main &&
           sudo systemctl restart fastapi-response-to-meeting'
         rm -f server_key.pem
+
