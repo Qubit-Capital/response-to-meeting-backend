@@ -24,7 +24,9 @@ jobs:
         ssh -o StrictHostKeyChecking=no -i server_key.pem ${USER}@${HOST} '
           cd /home/azureuser/qubit_app/response_to_meeting_api/production/response-to-meeting-backend &&
           git pull origin main &&
+          source app/venv/bin/activate &&
           pip install -r app/requirements.txt &&
+          deactivate &&
           sudo systemctl restart fastapi-response-to-meeting'
         rm -f server_key.pem
 
