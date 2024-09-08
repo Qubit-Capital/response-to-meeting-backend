@@ -390,10 +390,52 @@ async def fetch_emails(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching emails: {str(e)}")
 
+@app.get("/fetch-from-email-id/{email_id}", tags=["Emails"])
+async def fetch_email_by_id(email_id: str):
+    """
+    Fetch an email from the email data collection by its ID (from_email field).
+    """
+    try:
+        email = email_data_collection.find_one({"from_email": email_id})
+        
+        if email is None:
+            raise HTTPException(status_code=404, detail=f"Email with ID {email_id} not found")
+        
+        serialized_email = convert_to_serializable(email)
+        
+        return JSONResponse(
+            status_code=200,
+            content=serialized_email
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the email: {str(e)}")
+    
+
+@app.get("/fetch-to-email-id/{to_email}", tags=["Emails"])
+async def fetch_email_by_to_email(to_email: str):
+    """
+    Fetch an email from the email data collection by its to_email field.
+    """
+    try:
+        email = email_data_collection.find_one({"to_email": to_email})
+        
+        if email is None:
+            raise HTTPException(status_code=404, detail=f"Email with to_email {to_email} not found")
+        
+        serialized_email = convert_to_serializable(email)
+        
+        return JSONResponse(
+            status_code=200,
+            content=serialized_email
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the email: {str(e)}")
 
 
 
-if __name__ == "__main__":
-    init_db()
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0")
+
+
+# if __name__ == "__main__":
+#     init_db()
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0")
