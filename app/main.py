@@ -598,6 +598,33 @@ async def get_case_instruction(case_id: str):
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the case instruction: {str(e)}")
     
 
+@app.patch("/cases/{case_id}/new_instruction", response_model=InstructionResult)
+async def update_case_instruction(case_id: str, instruction: str = Query(..., description="The new instruction for the case")):
+    """
+    Update the instruction for a specific case by its ID.
+    """
+    try:
+        # Convert string ID to ObjectId
+        object_id = case_id
+        
+        # Update the case document in the email_classifications_collection
+        result = email_classifications_collection.update_one(
+            {"_id": object_id},
+            {"$set": {"instruction": instruction}}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        if result.modified_count == 0:
+            raise HTTPException(status_code=304, detail="Instruction not modified")
+        
+        # Return the updated instruction
+        return InstructionResult(instruction=instruction)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid case ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while updating the case instruction: {str(e)}")
 
 
 
