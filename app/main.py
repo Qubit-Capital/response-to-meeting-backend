@@ -517,7 +517,7 @@ class EmailClassificationResponse(BaseModel):
     is_corrected: bool
     feedback: str
 
-@app.get("/email-classifications", response_model=List[EmailClassificationResponse], tags=["Email Classifications"])
+@app.get("/cases", response_model=List[EmailClassificationResponse], tags=["Email Classifications"])
 async def fetch_email_classifications(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
@@ -525,7 +525,7 @@ async def fetch_email_classifications(
     sort_order: str = Query("desc", regex="^(asc|desc)$")
 ):
     """
-    Fetch email classifications from the email_classifications_collection.
+    Fetch email classifications(cases) from the email_classifications_collection.
     """
     try:
         # Determine sort direction
@@ -575,6 +575,28 @@ async def fetch_email_classifications(
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching email classifications: {str(e)}")
 
 
+@app.get("/cases/{case_id}/instruction", response_model=InstructionResult)
+async def get_case_instruction(case_id: str):
+    """
+    Retrieve the instruction for a specific case by its ID.
+    """
+    try:
+        # Convert string ID to ObjectId
+        object_id = case_id
+        
+        # Fetch the case document from the email_classifications_collection
+        case = email_classifications_collection.find_one({"_id": object_id})
+        
+        if case is None:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        # Return the instruction
+        return InstructionResult(instruction=case["instruction"])
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid case ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the case instruction: {str(e)}")
+    
 
 
 
