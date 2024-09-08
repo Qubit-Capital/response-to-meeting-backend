@@ -627,9 +627,7 @@ async def update_case_instruction(case_id: str, instruction: str = Query(..., de
         raise HTTPException(status_code=500, detail=f"An error occurred while updating the case instruction: {str(e)}")
 
 
-
-
-# if __name__ == "__main__":
-#     init_db()
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0")
+if __name__ == "__main__":
+    init_db()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0")
