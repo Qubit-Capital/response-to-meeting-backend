@@ -389,6 +389,8 @@ async def fetch_emails(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching emails: {str(e)}")
+    
+
 
 @app.get("/fetch-from-email-id/{email_id}", tags=["Emails"])
 async def fetch_email_by_id(email_id: str):
@@ -410,7 +412,7 @@ async def fetch_email_by_id(email_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the email: {str(e)}")
     
-
+    
 @app.get("/fetch-to-email-id/{to_email}", tags=["Emails"])
 async def fetch_email_by_to_email(to_email: str):
     """
@@ -430,12 +432,74 @@ async def fetch_email_by_to_email(to_email: str):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the email: {str(e)}")
+    
+
+@app.patch("/update-email-status/{doc_id}", tags=["Emails"])
+async def update_email_status(doc_id: str, status: str = Query(..., description="New status for the email")):
+    """
+    Update the status of an email in the email data collection by its ID (_id field of MongoDB document).
+    The new status is provided as a query parameter.
+    """
+    try:
+
+        # Convert string ID to ObjectId
+        object_id = ObjectId(doc_id)
+
+        # Update the document
+        result = email_data_collection.update_one(
+            {"_id": object_id},
+            {"$set": {"status": status}}
+        )
+
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail=f"Email with ID {doc_id} not found")
+
+        if result.modified_count == 0:
+            return JSONResponse(
+                status_code=200,
+                content={"message": "Email status unchanged (already set to the requested status)"}
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={"message": f"Email status updated to '{status}'"}
+        )
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid email ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while updating the email status: {str(e)}")
+    
+
+
+@app.get("/fetch-email-by-docId/{doc_id}", tags=["Emails"])
+async def fetch_email_by_doc_id(doc_id: str):
+    """
+    Fetch an email from the email data collection by its document ID (_id field of MongoDB document).
+    """
+    try:
+        # Convert string ID to ObjectId
+        object_id = ObjectId(doc_id)
+        
+        # Find the document
+        email = email_data_collection.find_one({"_id": object_id})
+        
+        if email is None:
+            raise HTTPException(status_code=404, detail=f"Email with ID {doc_id} not found")
+        
+        serialized_email = convert_to_serializable(email)
+        
+        return JSONResponse(
+            status_code=200,
+            content=serialized_email
+        )
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid email ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the email: {str(e)}")
 
 
 
-
-
-# if __name__ == "__main__":
-#     init_db()
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0")
+if __name__ == "__main__":
+    init_db()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0")
