@@ -499,7 +499,88 @@ async def fetch_email_by_doc_id(doc_id: str):
 
 
 
-if __name__ == "__main__":
-    init_db()
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0")
+class UserNeedResponse(BaseModel):
+    name: str
+    description: str
+
+class CategoryResponse(BaseModel):
+    name: str
+    description: str
+
+class EmailClassificationResponse(BaseModel):
+    email_id: str
+    user_need: UserNeedResponse
+    category: CategoryResponse
+    instruction: str
+    confidence_score: float
+    created_at: str
+    is_corrected: bool
+    feedback: str
+
+@app.get("/email-classifications", response_model=List[EmailClassificationResponse], tags=["Email Classifications"])
+async def fetch_email_classifications(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    sort_by: str = Query("created_at", regex="^(created_at|confidence_score)$"),
+    sort_order: str = Query("desc", regex="^(asc|desc)$")
+):
+    """
+    Fetch email classifications from the email_classifications_collection.
+    """
+    try:
+        # Determine sort direction
+        sort_direction = DESCENDING if sort_order == "desc" else ASCENDING
+
+        # Fetch email classifications
+        cursor = db["email_classifications"].find().sort(sort_by, sort_direction).skip(skip).limit(limit)
+        
+        # Convert cursor to list
+        documents = list(cursor)
+        
+        classifications = []
+        for doc in documents:
+            try:
+                user_need = db["user_needs"].find_one({"_id": doc["user_need_id"]})
+                category = db["categories"].find_one({"_id": doc["category_id"]})
+                
+                # Handle potential null values in the documents
+                user_need_response = UserNeedResponse(
+                    name=user_need["name"] if user_need else "",
+                    description=user_need["description"] if user_need else ""
+                )
+                category_response = CategoryResponse(
+                    name=category["name"] if category else "",
+                    description=category["description"] if category else ""
+                )
+
+                # Create the email classification response
+                classification = EmailClassificationResponse(
+                    email_id=doc["email_id"],
+                    user_need=user_need_response,
+                    category=category_response,
+                    instruction=doc["instruction"],
+                    confidence_score=doc["confidence_score"],
+                    created_at=doc["created_at"].isoformat(),
+                    is_corrected=doc["is_corrected"],
+                    feedback=doc.get("feedback", "")
+                )
+                classifications.append(classification)
+            except Exception as doc_error:
+                # Log the error and continue with the next document
+                print(f"Error processing document: {str(doc_error)}")
+                continue
+        
+        return classifications
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching email classifications: {str(e)}")
+
+
+
+
+
+
+
+# if __name__ == "__main__":
+#     init_db()
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0")
