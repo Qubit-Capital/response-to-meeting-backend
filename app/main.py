@@ -11,6 +11,13 @@ from fastapi.responses import Response, JSONResponse
 from pymongo import MongoClient
 from bson import ObjectId
 from datetime import datetime, timezone
+from typing import List, Dict
+from fastapi import APIRouter, HTTPException, Query
+from pymongo import ASCENDING, DESCENDING
+from datetime import datetime
+from typing import Any, Dict, List
+
+
 
 load_dotenv()
 
@@ -20,13 +27,17 @@ app = FastAPI(
     version="2.0.0"
 )
 
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 mongo_client = MongoClient(os.getenv("MONGODB_URI"))
 db = mongo_client["email_classification_db"]
+email_data_db = mongo_client["response-to-meeting"]
 
 categories_collection = db["categories"]
 user_needs_collection = db["user_needs"]
 email_classifications_collection = db["email_classifications"]
+
+email_data_collection = email_data_db["emails"]
 
 class Category(BaseModel):
     id: Optional[str] = Field(default_factory=lambda: str(ObjectId()), alias="_id")
@@ -76,6 +87,30 @@ class ClassificationResult(BaseModel):
 
 class InstructionResult(BaseModel):
     instruction: str
+
+
+class Email(BaseModel):
+    id: Optional[str] = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    from_email: str
+    subject: str
+    to_email: str
+    to_name: Optional[str] = None
+    event_timestamp: datetime
+    campaign_name: str
+    campaign_id: int
+    sent_message_text: str
+    reply_message_text: str
+    time_replied: datetime
+    status: str  # e.g., "standard", "archived", etc.
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {
+            ObjectId: str  # Ensure ObjectId is serialized as string
+        }
+
+
+
 
 def get_categories() -> List[Category]:
     return [Category(**cat) for cat in categories_collection.find()]
@@ -297,6 +332,66 @@ async def root():
             "openapi_schema": "/openapi.json"
         }
     )
+
+
+def convert_to_serializable(data: Any) -> Any:
+    """
+    Recursively converts non-serializable data types to JSON-compliant formats.
+    """
+    if isinstance(data, dict):
+        return {k: convert_to_serializable(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_to_serializable(item) for item in data]
+    elif isinstance(data, datetime):
+        return data.isoformat()
+    elif isinstance(data, ObjectId):
+        return str(data)
+    elif isinstance(data, float):
+        # Handle special float values and out-of-range issues
+        if data == float('inf') or data == float('-inf') or data != data:  # NaN or Infinity
+            return str(data)
+        return data
+    return data
+
+@app.get("/fetch-emails", tags=["Emails"])
+async def fetch_emails(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(10, ge=1, le=100, description="Number of emails per page"),
+    sort_by: str = Query("event_timestamp", description="Field to sort by"),
+    order: str = Query("desc", description="Sort order (asc or desc)")
+):
+    """
+    Fetch emails from the email data collection with pagination and sorting.
+    """
+    skip = (page - 1) * per_page
+    sort_direction = DESCENDING if order.lower() == "desc" else ASCENDING
+
+    try:
+        total_emails = email_data_collection.count_documents({})
+        emails_cursor = email_data_collection.find({}) \
+            .sort(sort_by, sort_direction) \
+            .skip(skip) \
+            .limit(per_page)
+
+        emails = []
+        for email in emails_cursor:  # Synchronous iteration
+            email = convert_to_serializable(email)
+            emails.append(email)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "total": total_emails,
+                "page": page,
+                "per_page": per_page,
+                "emails": emails
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching emails: {str(e)}")
+
+
+
 
 if __name__ == "__main__":
     init_db()
