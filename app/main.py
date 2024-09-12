@@ -591,6 +591,63 @@ async def fetch_email_classifications(
         return classifications
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching email classifications: {str(e)}")
+    
+
+
+@app.get("/cases/{case_id}", response_model=EmailClassificationResponse, tags=["Email Classifications"])
+async def fetch_single_case(case_id: str):
+    """
+    Fetch a single email classification(case) from the cases collection by its ID.
+    """
+    try:
+        # Convert string ID to ObjectId
+        object_id = ObjectId(case_id)
+
+        # Fetch the case document from the email_data_db
+        doc = email_data_db["cases"].find_one({"_id": object_id})
+
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        user_need = email_data_db["user_needs"].find_one({"_id": ObjectId(doc["user_need_id"])})
+        category = email_data_db["categories"].find_one({"_id": ObjectId(doc["category_id"])})
+        instruction = email_data_db["instruction_templates"].find_one({"_id": ObjectId(doc["instruction_template_id"])})
+
+        # Handle potential null values in the documents
+        user_need_response = UserNeedResponse(
+            id=str(user_need["_id"]) if user_need else "",
+            name=user_need["name"] if user_need else "",
+            description=user_need["description"] if user_need else ""
+        )
+        category_response = CategoryResponse(
+            id=str(category["_id"]) if category else "",
+            name=category["name"] if category else "",
+            description=category["description"] if category else ""
+        )
+
+        instruction_template_response = CaseInstructionResponse(
+            template=instruction["template"] if instruction else ""
+        )
+
+        # Create the email classification response
+        classification = EmailClassificationResponse(
+            id = str(doc["_id"]),
+            email_id= str(doc["email_id"]),
+            user_need=user_need_response,
+            category=category_response,
+            instruction=instruction_template_response,
+            confidence_score=doc["confidence_score"],
+            created_at=doc["created_at"].isoformat(),
+        )
+
+        return classification
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid case ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the case: {str(e)}")
+
+
+
 
 
 @app.get("/cases/{case_id}/instruction", response_model=CaseInstructionResult)
@@ -658,6 +715,13 @@ async def update_case_instruction(case_id: str, instruction: str = Query(..., de
         raise HTTPException(status_code=400, detail="Invalid case ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while updating the case instruction: {str(e)}")
+
+
+
+
+# GET /api/cases/:id
+# GET /api/categories
+# GET /api/user-needs
 
 
 # if __name__ == "__main__":
