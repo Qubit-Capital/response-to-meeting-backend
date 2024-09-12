@@ -765,8 +765,78 @@ async def get_category_by_id(category_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the category: {str(e)}")
 
-# GET /api/cases/:id
-# GET /api/categories
+class UserNeedWithCategory(BaseModel):
+    id: str = Field(..., alias="_id")
+    name: str
+    description: str
+    created_at: datetime
+    updated_at: datetime
+    is_custom: bool
+    category: Category
+
+@app.get("/user-needs", response_model=List[UserNeedWithCategory])
+async def get_user_needs():
+    """
+    Fetch all user needs from the database, including their associated category details.
+    """
+    try:
+        user_needs = list(email_data_db["user_needs"].find())
+        
+        result = []
+        for user_need in user_needs:
+            # Convert ObjectId to string
+            user_need["_id"] = str(user_need["_id"])
+            
+            # Fetch the associated category
+            category = email_data_db["categories"].find_one({"_id": ObjectId(user_need["category_id"])})
+            
+            if category:
+                # Convert category ObjectId to string
+                category["_id"] = str(category["_id"])
+                user_need["category"] = Category(**category)
+            else:
+                # If category not found, set it to None
+                user_need["category"] = None
+            
+            result.append(UserNeedWithCategory(**user_need))
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching user needs: {str(e)}")
+
+@app.get("/user-needs/{user_need_id}", response_model=UserNeedWithCategory)
+async def get_user_need_by_id(user_need_id: str):
+    """
+    Fetch a specific user need by its ID from the database, including its associated category details.
+    """
+    try:
+        user_need = email_data_db["user_needs"].find_one({"_id": ObjectId(user_need_id)})
+        
+        if user_need is None:
+            raise HTTPException(status_code=404, detail="User need not found")
+        
+        # Convert ObjectId to string
+        user_need["_id"] = str(user_need["_id"])
+        
+        # Fetch the associated category
+        category = email_data_db["categories"].find_one({"_id": ObjectId(user_need["category_id"])})
+        
+        if category:
+            # Convert category ObjectId to string
+            category["_id"] = str(category["_id"])
+            user_need["category"] = Category(**category)
+        else:
+            # If category not found, set it to None
+            user_need["category"] = None
+        
+        return UserNeedWithCategory(**user_need)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid user need ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the user need: {str(e)}")
+
+
+
 # GET /api/user-needs
 
 
