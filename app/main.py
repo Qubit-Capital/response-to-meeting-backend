@@ -500,22 +500,33 @@ async def fetch_email_by_doc_id(doc_id: str):
 
 
 class UserNeedResponse(BaseModel):
+    id: str
     name: str
     description: str
 
 class CategoryResponse(BaseModel):
+    id: str
     name: str
     description: str
 
+
+class CaseInstructionResponse(BaseModel):
+    template: str
+
 class EmailClassificationResponse(BaseModel):
+    id: str
     email_id: str
     user_need: UserNeedResponse
     category: CategoryResponse
-    instruction: str
+    instruction: CaseInstructionResponse
     confidence_score: float
     created_at: str
-    is_corrected: bool
-    feedback: str
+
+
+class CaseInstructionResult(BaseModel):
+    id: str
+    instruction: str
+    
 
 @app.get("/cases", response_model=List[EmailClassificationResponse], tags=["Email Classifications"])
 async def fetch_email_classifications(
@@ -525,14 +536,14 @@ async def fetch_email_classifications(
     sort_order: str = Query("desc", regex="^(asc|desc)$")
 ):
     """
-    Fetch email classifications(cases) from the email_classifications_collection.
+    Fetch email classifications(cases) from the cases collection.
     """
     try:
         # Determine sort direction
         sort_direction = DESCENDING if sort_order == "desc" else ASCENDING
 
         # Fetch email classifications
-        cursor = db["email_classifications"].find().sort(sort_by, sort_direction).skip(skip).limit(limit)
+        cursor = email_data_db["cases"].find().sort(sort_by, sort_direction).skip(skip).limit(limit)
         
         # Convert cursor to list
         documents = list(cursor)
@@ -540,29 +551,36 @@ async def fetch_email_classifications(
         classifications = []
         for doc in documents:
             try:
-                user_need = db["user_needs"].find_one({"_id": doc["user_need_id"]})
-                category = db["categories"].find_one({"_id": doc["category_id"]})
+                user_need = email_data_db["user_needs"].find_one({"_id": ObjectId(doc["user_need_id"])})
+                category = email_data_db["categories"].find_one({"_id": ObjectId(doc["category_id"])})
+                instruction = email_data_db["instruction_templates"].find_one({"_id": ObjectId(doc["instruction_template_id"])})
                 
                 # Handle potential null values in the documents
                 user_need_response = UserNeedResponse(
+                    id=str(user_need["_id"]) if user_need else "", 
                     name=user_need["name"] if user_need else "",
                     description=user_need["description"] if user_need else ""
                 )
                 category_response = CategoryResponse(
+                    id=str(category["_id"]) if category else "",
                     name=category["name"] if category else "",
                     description=category["description"] if category else ""
                 )
 
+
+                instruction_template_response = CaseInstructionResponse(
+                    template=instruction["template"] if instruction else ""
+                )
+
                 # Create the email classification response
                 classification = EmailClassificationResponse(
-                    email_id=doc["email_id"],
+                    id = str(doc["_id"]),
+                    email_id= str(doc["email_id"]),
                     user_need=user_need_response,
                     category=category_response,
-                    instruction=doc["instruction"],
+                    instruction=instruction_template_response,
                     confidence_score=doc["confidence_score"],
                     created_at=doc["created_at"].isoformat(),
-                    is_corrected=doc["is_corrected"],
-                    feedback=doc.get("feedback", "")
                 )
                 classifications.append(classification)
             except Exception as doc_error:
@@ -575,59 +593,74 @@ async def fetch_email_classifications(
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching email classifications: {str(e)}")
 
 
-@app.get("/cases/{case_id}/instruction", response_model=InstructionResult)
+@app.get("/cases/{case_id}/instruction", response_model=CaseInstructionResult)
 async def get_case_instruction(case_id: str):
     """
     Retrieve the instruction for a specific case by its ID.
     """
     try:
         # Convert string ID to ObjectId
-        object_id = case_id
-        
-        # Fetch the case document from the email_classifications_collection
-        case = email_classifications_collection.find_one({"_id": object_id})
-        
+        object_id = ObjectId(case_id)
+
+        # Fetch the case document from the email_data_db
+        case = email_data_db["cases"].find_one({"_id": object_id})
+
         if case is None:
             raise HTTPException(status_code=404, detail="Case not found")
-        
-        # Return the instruction
-        return InstructionResult(instruction=case["instruction"])
+
+        # Match instruction_template_id from the case with the _id in instruction_templates
+        instruction_template = email_data_db["instruction_templates"].find_one({
+            "_id": ObjectId(case["instruction_template_id"])
+        })
+
+        if instruction_template is None:
+            raise HTTPException(status_code=404, detail="Instruction template not found")
+
+        # Return the instruction template
+        return CaseInstructionResult(id=str(instruction_template["_id"]),instruction=instruction_template["template"])
+
     except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid case ID format")
+        raise HTTPException(status_code=400, detail="Invalid case ID or instruction template ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the case instruction: {str(e)}")
-    
 
-@app.patch("/cases/{case_id}/new_instruction", response_model=InstructionResult)
+
+@app.patch("/cases/{case_id}/new_instruction", response_model=CaseInstructionResult)
 async def update_case_instruction(case_id: str, instruction: str = Query(..., description="The new instruction for the case")):
     """
     Update the instruction for a specific case by its ID.
     """
     try:
         # Convert string ID to ObjectId
-        object_id = case_id
-        
-        # Update the case document in the email_classifications_collection
-        result = email_classifications_collection.update_one(
-            {"_id": object_id},
-            {"$set": {"instruction": instruction}}
-        )
-        
-        if result.matched_count == 0:
+        object_id = ObjectId(case_id)
+
+        # Fetch the case document from the email_data_db
+        case = email_data_db["cases"].find_one({"_id": object_id})
+
+        if case is None:
             raise HTTPException(status_code=404, detail="Case not found")
-        
+
+        # Update the instruction template in the instruction_templates collection
+        result = email_data_db["instruction_templates"].update_one(
+            {"_id": ObjectId(case["instruction_template_id"])},
+            {"$set": {"template": instruction}}
+        )
+
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Instruction template not found")
+
         if result.modified_count == 0:
             raise HTTPException(status_code=304, detail="Instruction not modified")
-        
+
         # Return the updated instruction
-        return InstructionResult(instruction=instruction)
+        return CaseInstructionResult(id=str(case["instruction_template_id"]),instruction=instruction)
     except InvalidId:
         raise HTTPException(status_code=400, detail="Invalid case ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while updating the case instruction: {str(e)}")
 
 
-if __name__ == "__main__":
-    init_db()
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0")
+# if __name__ == "__main__":
+#     init_db()
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0")
