@@ -16,6 +16,9 @@ from fastapi import APIRouter, HTTPException, Query
 from pymongo import ASCENDING, DESCENDING
 from datetime import datetime
 from typing import Any, Dict, List
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import List
 
 
 
@@ -718,6 +721,49 @@ async def update_case_instruction(case_id: str, instruction: str = Query(..., de
 
 
 
+class Category(BaseModel):
+    id: str = Field(..., alias="_id")
+    name: str
+    description: str
+    created_at: datetime
+    updated_at: datetime
+    is_custom: bool
+
+@app.get("/categories", response_model=List[Category])
+async def get_categories():
+    """
+    Fetch all categories from the database.
+    """
+    try:
+        categories = list(email_data_db["categories"].find())
+        
+        # Convert ObjectId to string for each category
+        for category in categories:
+            category["_id"] = str(category["_id"])
+        
+        return categories
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching categories: {str(e)}")
+
+@app.get("/categories/{category_id}", response_model=Category)
+async def get_category_by_id(category_id: str):
+    """
+    Fetch a specific category by its ID from the database.
+    """
+    try:
+        category = email_data_db["categories"].find_one({"_id": ObjectId(category_id)})
+        
+        if category is None:
+            raise HTTPException(status_code=404, detail="Category not found")
+        
+        # Convert ObjectId to string
+        category["_id"] = str(category["_id"])
+        
+        return category
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid category ID format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching the category: {str(e)}")
 
 # GET /api/cases/:id
 # GET /api/categories
