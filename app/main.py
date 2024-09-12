@@ -312,9 +312,7 @@ async def classify_email_endpoint(email_data: EmailData):
     
     return new_case
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0")
+
 
 
 @app.get("/", tags=["Info"])
@@ -351,3 +349,6 @@ async def root():
     )
 
 
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0")
