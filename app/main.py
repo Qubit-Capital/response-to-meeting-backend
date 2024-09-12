@@ -303,38 +303,6 @@ def init_db():
         ]
         user_needs_collection.insert_many([need.dict(by_alias=True, exclude_none=True) for need in initial_user_needs])
 
-@app.get("/", tags=["Info"])
-async def root():
-    """
-    Root endpoint that provides information about the API.
-    """
-    return JSONResponse(
-        status_code=200,
-        content={
-            "name": "Email Classification AI Agent",
-            "version": "2.0.0",
-            "description": "This API provides email classification and response generation capabilities.",
-            "endpoints": [
-                {
-                    "path": "/",
-                    "method": "GET",
-                    "description": "Get information about the API"
-                },
-                {
-                    "path": "/classify-email/",
-                    "method": "POST",
-                    "description": "Classify a single email exchange and generate a response instruction"
-                },
-                {
-                    "path": "/process-csv/",
-                    "method": "POST",
-                    "description": "Process a CSV file containing multiple email exchanges"
-                }
-            ],
-            "documentation": "/docs",
-            "openapi_schema": "/openapi.json"
-        }
-    )
 
 
 def convert_to_serializable(data: Any) -> Any:
@@ -467,8 +435,6 @@ async def update_email_status(doc_id: str, status: str = Query(..., description=
             status_code=200,
             content={"message": f"Email status updated to '{status}'"}
         )
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid email ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while updating the email status: {str(e)}")
     
@@ -495,8 +461,6 @@ async def fetch_email_by_doc_id(doc_id: str):
             status_code=200,
             content=serialized_email
         )
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid email ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the email: {str(e)}")
 
@@ -644,8 +608,6 @@ async def fetch_single_case(case_id: str):
         )
 
         return classification
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid case ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the case: {str(e)}")
 
@@ -678,9 +640,6 @@ async def get_case_instruction(case_id: str):
 
         # Return the instruction template
         return CaseInstructionResult(id=str(instruction_template["_id"]),instruction=instruction_template["template"])
-
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid case ID or instruction template ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the case instruction: {str(e)}")
 
@@ -714,11 +673,43 @@ async def update_case_instruction(case_id: str, instruction: str = Query(..., de
 
         # Return the updated instruction
         return CaseInstructionResult(id=str(case["instruction_template_id"]),instruction=instruction)
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid case ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while updating the case instruction: {str(e)}")
+    
 
+    
+
+@app.patch("/cases/{case_id}/update_email_id", response_model=dict)
+async def update_case_email_id(case_id: str, email_id: str = Query(..., description="The new email ID for the case")):
+    """
+    Update the email_id for a specific case by its ID.
+    """
+    try:
+        # Convert string ID to ObjectId
+        object_id = ObjectId(case_id)
+
+        # Fetch the case document from the email_data_db
+        case = email_data_db["cases"].find_one({"_id": object_id})
+
+        if case is None:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        # Update the email_id in the cases collection
+        result = email_data_db["cases"].update_one(
+            {"_id": object_id},
+            {"$set": {"email_id": ObjectId(email_id)}}
+        )
+
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        if result.modified_count == 0:
+            raise HTTPException(status_code=304, detail="Email ID not modified")
+
+        # Return a message indicating the email ID was updated
+        return {"message": f"Email ID updated to {email_id} for case {case_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while updating the case email ID: {str(e)}")
 
 
 class Category(BaseModel):
@@ -760,8 +751,6 @@ async def get_category_by_id(category_id: str):
         category["_id"] = str(category["_id"])
         
         return category
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid category ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the category: {str(e)}")
 
@@ -830,17 +819,92 @@ async def get_user_need_by_id(user_need_id: str):
             user_need["category"] = None
         
         return UserNeedWithCategory(**user_need)
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid user need ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the user need: {str(e)}")
 
 
 
-# GET /api/user-needs
+@app.get("/", tags=["Info"])
+async def root():
+    """
+    Root endpoint that provides information about the API.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "name": "Email Classification AI Agent",
+            "version": "2.0.0",
+            "description": "This API provides email classification and response generation capabilities.",
+            "endpoints": [
+                {
+                    "path": "/",
+                    "method": "GET",
+                    "description": "Get information about the API"
+                },
+                {
+                    "path": "/classify-email/",
+                    "method": "POST",
+                    "description": "Classify a single email exchange and generate a response instruction"
+                },
+                {
+                    "path": "/process-csv/",
+                    "method": "POST",
+                    "description": "Process a CSV file containing multiple email exchanges"
+                },
+                {
+                    "path": "/fetch-emails",
+                    "method": "GET",
+                    "description": "Fetch emails with pagination and sorting"
+                },
+                {
+                    "path": "/categories",
+                    "method": "GET",
+                    "description": "Fetch all categories"
+                },
+                {
+                    "path": "/categories/{category_id}",
+                    "method": "GET",
+                    "description": "Fetch a specific category by ID"
+                },
+                {
+                    "path": "/user-needs",
+                    "method": "GET",
+                    "description": "Fetch all user needs with their associated categories"
+                },
+                {
+                    "path": "/user-needs/{user_need_id}",
+                    "method": "GET",
+                    "description": "Fetch a specific user need by ID with its associated category"
+                },
+                {
+                    "path": "/cases",
+                    "method": "GET",
+                    "description": "Fetch all cases with pagination and sorting"
+                },
+                {
+                    "path": "/cases/{case_id}",
+                    "method": "GET",
+                    "description": "Fetch a specific case by ID"
+                },
+                {
+                    "path": "/cases",
+                    "method": "POST",
+                    "description": "Create a new case"
+                },
+                {
+                    "path": "/cases/{case_id}",
+                    "method": "PUT",
+                    "description": "Update an existing case"
+                }
+            ],
+            "documentation": "/docs",
+            "openapi_schema": "/openapi.json"
+        }
+    )
 
 
-# if __name__ == "__main__":
-#     init_db()
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0")
+
+if __name__ == "__main__":
+    init_db()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0")
