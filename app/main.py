@@ -1,13 +1,14 @@
 import json
 import os
-from fastapi import FastAPI, HTTPException
-from pymongo import MongoClient
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pymongo import MongoClient, DESCENDING, ASCENDING
 from bson import ObjectId
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Any
 
 load_dotenv()
 
@@ -231,6 +232,24 @@ def generate_instruction(category: str, user_need: str) -> InstructionResult:
         print(f"Error generating instruction: {str(e)}")
         return None
 
+def convert_to_serializable(data: Any) -> Any:
+    """
+    Recursively converts non-serializable data types to JSON-compliant formats.
+    """
+    if isinstance(data, dict):
+        return {k: convert_to_serializable(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_to_serializable(item) for item in data]
+    elif isinstance(data, datetime):
+        return data.isoformat()
+    elif isinstance(data, ObjectId):
+        return str(data)
+    elif isinstance(data, float):
+        if data == float('inf') or data == float('-inf') or data != data:  # NaN or Infinity
+            return str(data)
+        return data
+    return data
+
 def get_case_by_email_id(email_id):
     try:
         email_object_id = ObjectId(email_id)
@@ -312,6 +331,40 @@ async def classify_email_endpoint(email_data: EmailData):
     
     return new_case
 
+
+@app.get("/fetch-emails", tags=["Emails"])
+async def fetch_emails(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(10, ge=1, le=100, description="Number of emails per page"),
+    sort_by: str = Query("event_timestamp", description="Field to sort by"),
+    order: str = Query("desc", description="Sort order (asc or desc)")
+):
+    """
+    Fetch emails from the email data collection with pagination and sorting.
+    """
+    skip = (page - 1) * per_page
+    sort_direction = DESCENDING if order.lower() == "desc" else ASCENDING
+
+    try:
+        total_emails = email_collection.count_documents({})
+        emails_cursor = email_collection.find({}) \
+            .sort(sort_by, sort_direction) \
+            .skip(skip) \
+            .limit(per_page)
+
+        emails = [convert_to_serializable(email) for email in emails_cursor]
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "total": total_emails,
+                "page": page,
+                "per_page": per_page,
+                "emails": emails
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching emails: {str(e)}")
 
 
 
