@@ -1,14 +1,18 @@
 import json
 import os
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pymongo import MongoClient, DESCENDING, ASCENDING
+
 from bson import ObjectId
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
 from typing import List, Optional, Any
+
 
 load_dotenv()
 
@@ -24,6 +28,7 @@ cases_collection = db["cases"]
 categories_collection = db["categories"]
 user_needs_collection = db["user_needs"]
 instruction_templates_collection = db["instruction_templates"]
+
 
 # OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -250,6 +255,7 @@ def convert_to_serializable(data: Any) -> Any:
         return data
     return data
 
+
 def get_case_by_email_id(email_id):
     try:
         email_object_id = ObjectId(email_id)
@@ -307,7 +313,7 @@ async def classify_email_endpoint(email_data: EmailData):
     classification = analyze_email(email_data.sent_message_text, email_data.reply_message_text)
     if not classification:
         raise HTTPException(status_code=500, detail="Failed to classify email")
-    
+
     category = get_or_create_category(classification.category)
     user_need = get_or_create_user_need(category.id, classification.user_need)
     
@@ -318,6 +324,7 @@ async def classify_email_endpoint(email_data: EmailData):
     if not instruction_template:
         raise HTTPException(status_code=500, detail="Failed to create instruction template")
     
+
     new_case = Case(
         email_id=ObjectId(),  # Generate a new ObjectId for the email
         category_id=category.id,
@@ -330,6 +337,7 @@ async def classify_email_endpoint(email_data: EmailData):
     new_case.id = result.inserted_id
     
     return new_case
+
 
 
 @app.get("/fetch-emails", tags=["Emails"])
@@ -365,6 +373,7 @@ async def fetch_emails(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching emails: {str(e)}")
+
 
 
 
