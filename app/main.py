@@ -24,60 +24,90 @@ from typing import List
 
 load_dotenv()
 
-app = FastAPI(
-    title="Email Classification AI Agent",
-    description="An AI-powered email classification and response generation system",
-    version="2.0.0"
-)
+
+app = FastAPI()
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-mongo_client = MongoClient(os.getenv("MONGODB_URI"))
-db = mongo_client["email_classification_db"]
-email_data_db = mongo_client["response-to-meeting"]
 
+# MongoDB connection
+mongo_client = MongoClient(os.getenv("MONGODB_URI"))
+db = mongo_client["response-to-meeting"]
+
+
+# Collections
+email_collection = db["emails"]
+cases_collection = db["cases"]
 categories_collection = db["categories"]
 user_needs_collection = db["user_needs"]
-email_classifications_collection = db["email_classifications"]
+instruction_templates_collection = db["instruction_templates"]
 
-email_data_collection = email_data_db["emails"]
 
-class Category(BaseModel):
-    id: Optional[str] = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v):
+        if not ObjectId.is_valid(v):
+            raise ValueError("Invalid objectid")
+        return ObjectId(v)
+
+    @classmethod
+    def __modify_schema__(cls, field_schema):
+        field_schema.update(type="string")
+
+class MongoBaseModel(BaseModel):
+    class Config:
+        json_encoders = {
+            ObjectId: str,
+            datetime: lambda v: v.isoformat()
+        }
+        allow_population_by_field_name = True
+        arbitrary_types_allowed = True
+
+class Category(MongoBaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     name: str
     description: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_custom: bool = False
 
-    class Config:
-        allow_population_by_field_name = True
-
-class UserNeed(BaseModel):
-    id: Optional[str] = Field(default_factory=lambda: str(ObjectId()), alias="_id")
-    category_id: str
+class UserNeed(MongoBaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    category_id: PyObjectId
     name: str
     description: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_custom: bool = False
 
-    class Config:
-        allow_population_by_field_name = True
 
-class EmailClassification(BaseModel):
-    id: Optional[str] = Field(default_factory=lambda: str(ObjectId()), alias="_id")
-    email_id: str
-    category_id: str
-    user_need_id: str
-    instruction: str
+class InstructionTemplate(MongoBaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    category_id: PyObjectId
+    user_need_id: PyObjectId
+    template: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Case(MongoBaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    email_id: PyObjectId
+    category_id: PyObjectId
+    user_need_id: PyObjectId
+    instruction_template_id: PyObjectId
     confidence_score: float
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    feedback: Optional[str] = None
-    is_corrected: bool = False
 
-    class Config:
-        allow_population_by_field_name = True
+class CaseDetails(MongoBaseModel):
+    case: Case
+    category: Category
+    user_need: UserNeed
+    instruction: InstructionTemplate
 
 class EmailData(BaseModel):
     sent_message_text: str
@@ -92,54 +122,63 @@ class InstructionResult(BaseModel):
     instruction: str
 
 
-class Email(BaseModel):
-    id: Optional[str] = Field(default_factory=lambda: str(ObjectId()), alias="_id")
-    from_email: str
-    subject: str
-    to_email: str
-    to_name: Optional[str] = None
-    event_timestamp: datetime
-    campaign_name: str
-    campaign_id: int
-    sent_message_text: str
-    reply_message_text: str
-    time_replied: datetime
-    status: str  # e.g., "standard", "archived", etc.
-
-    class Config:
-        allow_population_by_field_name = True
-        json_encoders = {
-            ObjectId: str  # Ensure ObjectId is serialized as string
-        }
-
-
-
-
 def get_categories() -> List[Category]:
     return [Category(**cat) for cat in categories_collection.find()]
 
 def get_user_needs() -> List[UserNeed]:
     return [UserNeed(**need) for need in user_needs_collection.find()]
 
-def create_or_get_category(name: str, description: str = "") -> Category:
+def get_or_create_category(name: str, description: str = "") -> Category:
     existing_category = categories_collection.find_one({"name": name})
     if existing_category:
         return Category(**existing_category)
     
     new_category = Category(name=name, description=description, is_custom=True)
-    result = categories_collection.insert_one(new_category.dict(by_alias=True, exclude_none=True))
-    new_category.id = str(result.inserted_id)
+    result = categories_collection.insert_one(new_category.dict(exclude={"id"}, by_alias=True))
+    new_category.id = result.inserted_id
     return new_category
 
-def create_or_get_user_need(category_id: str, name: str, description: str = "") -> UserNeed:
+def get_or_create_user_need(category_id: PyObjectId, name: str, description: str = "") -> UserNeed:
     existing_user_need = user_needs_collection.find_one({"category_id": category_id, "name": name})
     if existing_user_need:
         return UserNeed(**existing_user_need)
     
     new_user_need = UserNeed(category_id=category_id, name=name, description=description, is_custom=True)
-    result = user_needs_collection.insert_one(new_user_need.dict(by_alias=True, exclude_none=True))
-    new_user_need.id = str(result.inserted_id)
+    result = user_needs_collection.insert_one(new_user_need.dict(exclude={"id"}, by_alias=True))
+    new_user_need.id = result.inserted_id
     return new_user_need
+
+
+def get_or_create_instruction_template(category_id: PyObjectId, user_need_id: PyObjectId) -> Optional[InstructionTemplate]:
+    existing_template = instruction_templates_collection.find_one({
+        "category_id": category_id,
+        "user_need_id": user_need_id
+    })
+    if existing_template:
+        return InstructionTemplate(**existing_template)
+    
+    category = categories_collection.find_one({"_id": category_id})
+    user_need = user_needs_collection.find_one({"_id": user_need_id})
+    
+    if not category or not user_need:
+        print(f"Error: Category or User Need not found. Category ID: {category_id}, User Need ID: {user_need_id}")
+        return None
+    
+    instruction = generate_instruction(category["name"], user_need["name"])
+    
+    if not instruction:
+        print("Error: Failed to generate instruction")
+        return None
+    
+    new_template = InstructionTemplate(
+        category_id=category_id,
+        user_need_id=user_need_id,
+        template=instruction.instruction
+    )
+    result = instruction_templates_collection.insert_one(new_template.dict(exclude={"id"}, by_alias=True))
+    new_template.id = result.inserted_id
+    return new_template
+
 
 def analyze_email(sent_text: str, reply_text: str) -> ClassificationResult:
     categories = get_categories()
@@ -151,9 +190,10 @@ def analyze_email(sent_text: str, reply_text: str) -> ClassificationResult:
     prompt = f"""
     Analyze the following email exchange and provide:
 
-    1. The most appropriate category for the reply. If no existing category fits, suggest a new one.
-    2. The specific user need or intent behind the reply. If no existing user need fits, suggest a new one.
-    3. A confidence score between 0 and 1 for your classification.
+    1. The most appropriate generic category for the reply. If no existing category fits, suggest a new one.
+    2. The specific generic user need or intent behind the reply. If no existing user need fits, suggest a new one.
+
+    Do not include any personally identifiable information in your classification.
 
     Existing Categories:
     {categories_str}
@@ -181,129 +221,106 @@ def analyze_email(sent_text: str, reply_text: str) -> ClassificationResult:
         result = completion.choices[0].message.parsed
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing LLM response: {str(e)}")
+        print(f"Error processing LLM response: {str(e)}")
+        return None
 
-def generate_instruction(category: str, user_need: str, sent_text: str, reply_text: str) -> InstructionResult:
+def generate_instruction(category: str, user_need: str) -> InstructionResult:
     prompt = f"""
-    Based on the following email exchange and its classification, generate a detailed instruction for creating an appropriate follow-up email:
+    Generate a generic instruction for creating an appropriate follow-up email based on the following category and user need:
 
     Category: {category}
     User Need: {user_need}
 
-    Email exchange:
-    Sent message: {sent_text}
-    Email reply: {reply_text}
-
-    Provide a specific and contextual instruction for crafting a follow-up email.
+    Provide a generic and contextual instruction for crafting a follow-up email.
+    Do not include any specific details or personally identifiable information.
+    The instruction should be applicable to any email within this category and user need.
     """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4-0125-preview",
+        completion = client.beta.chat.completions.parse(
+            model="gpt-4o-mini-2024-07-18",
             messages=[
                 {"role": "system", "content": "You are an AI assistant that generates email response instructions."},
                 {"role": "user", "content": prompt}
             ],
-            functions=[{
-                "name": "generate_instruction",
-                "description": "Generate a detailed instruction for email follow-up",
-                "parameters": InstructionResult.schema()
-            }],
-            function_call={"name": "generate_instruction"}
+            response_format=InstructionResult
         )
 
-        result = response.choices[0].message.function_call.arguments
-        return InstructionResult.parse_raw(result)
+        result = completion.choices[0].message.parsed
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating instruction: {str(e)}")
+        print(f"Error generating instruction: {str(e)}")
+        return None
 
-@app.post("/classify-email/", response_model=EmailClassification)
+
+
+def get_case_by_email_id(email_id):
+    try:
+        email_object_id = ObjectId(email_id)
+        case = cases_collection.find_one({"email_id": email_object_id})
+        
+        if not case:
+            print(f"No case found for email_id: {email_id}")
+            return None
+        
+        print("Case found:")
+        print(case)
+        return case
+    except Exception as e:
+        print(f"Error retrieving case: {str(e)}")
+        return None
+
+def get_case_details(case):
+    try:
+        category = categories_collection.find_one({"_id": case["category_id"]})
+        user_need = user_needs_collection.find_one({"_id": case["user_need_id"]})
+        instruction = instruction_templates_collection.find_one({"_id": case["instruction_template_id"]})
+        
+        if not all([category, user_need, instruction]):
+            print("Some case details are missing")
+            return None
+        
+        case_details = CaseDetails(
+            case=Case(**case),
+            category=Category(**category),
+            user_need=UserNeed(**user_need),
+            instruction=InstructionTemplate(**instruction)
+        )
+        
+        print("Case details found:")
+        print(case_details)
+        return case_details
+    except Exception as e:
+        print(f"Error retrieving case details: {str(e)}")
+        return None
+
+@app.get("/case-details-by-email/{email_id}", response_model=CaseDetails)
+async def get_case_details_by_email(email_id: str):
+    case = get_case_by_email_id(email_id)
+    if not case:
+        raise HTTPException(status_code=404, detail=f"No case found for email_id: {email_id}")
+    
+    case_details = get_case_details(case)
+    if not case_details:
+        raise HTTPException(status_code=404, detail=f"Case details not found for case_id: {case['_id']}")
+    
+    return case_details
+
+@app.post("/classify-email/", response_model=Case)
 async def classify_email_endpoint(email_data: EmailData):
     classification = analyze_email(email_data.sent_message_text, email_data.reply_message_text)
+    if not classification:
+        raise HTTPException(status_code=500, detail="Failed to classify email")
+
+    category = get_or_create_category(classification.category)
+    user_need = get_or_create_user_need(category.id, classification.user_need)
     
-    category = create_or_get_category(classification.category)
-    user_need = create_or_get_user_need(category.id, classification.user_need)
+    if not category or not user_need:
+        raise HTTPException(status_code=500, detail="Failed to create category or user need")
     
-    instruction_result = generate_instruction(classification.category, classification.user_need, email_data.sent_message_text, email_data.reply_message_text)
-    
-    email_classification = EmailClassification(
-        email_id=str(ObjectId()),
-        category_id=category.id,
-        user_need_id=user_need.id,
-        instruction=instruction_result.instruction,
-        confidence_score=classification.confidence_score
-    )
-    
-    email_classifications_collection.insert_one(email_classification.dict(by_alias=True, exclude_none=True))
-    
-    return email_classification
-
-@app.post("/process-csv/")
-async def process_csv_endpoint(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
-    content = await file.read()
-    csv_data = content.decode('utf-8').splitlines()
-    csv_reader = csv.DictReader(csv_data)
-
-    output_rows = []
-    fieldnames = csv_reader.fieldnames + ['classification_category', 'user_need', 'follow_up_instruction', 'confidence_score']
-
-    for row in csv_reader:
-        sent_text = row['sent_message_text']
-        reply_text = row['reply_message_text']
-
-        background_tasks.add_task(process_email, sent_text, reply_text)
-
-        output_rows.append(row)
-
-    output = io.StringIO()
-    csv_writer = csv.DictWriter(output, fieldnames=fieldnames)
-    csv_writer.writeheader()
-    csv_writer.writerows(output_rows)
-    csv_content = output.getvalue()
-    output.close()
-
-    output_filename = f"processed_{file.filename}"
-    output_path = os.path.join("output", output_filename)
-    os.makedirs("output", exist_ok=True)
-    with open(output_path, "w", newline="") as f:
-        f.write(csv_content)
-
-    response = Response(content=csv_content, media_type="text/csv")
-    response.headers["Content-Disposition"] = f"attachment; filename={output_filename}"
-
-    return response
-
-async def process_email(sent_text: str, reply_text: str):
-    email_data = EmailData(sent_message_text=sent_text, reply_message_text=reply_text)
-    await classify_email_endpoint(email_data)
-
-def init_db():
-    # Clear existing data (optional, remove in production)
-    categories_collection.delete_many({})
-    user_needs_collection.delete_many({})
-    
-
-    if categories_collection.count_documents({}) == 0:
-        initial_categories = [
-            Category(name="Not interested", description="Not interested in any type of service/collaboration"),
-            Category(name="Out of office", description="Out of office, please contact later"),
-            Category(name="Schedule call", description="Would like to schedule a call"),
-            Category(name="Request information", description="Request information about services or company"),
-            Category(name="Open to explore", description="Open to explore potential partnerships/services"),
-        ]
-        categories_collection.insert_many([cat.dict(by_alias=True, exclude_none=True) for cat in initial_categories])
-
-    if user_needs_collection.count_documents({}) == 0:
-        initial_user_needs = [
-            UserNeed(category_id=str(categories_collection.find_one({"name": "Not interested"})["_id"]), name="Polite rejection", description="Politely reject the offer"),
-            UserNeed(category_id=str(categories_collection.find_one({"name": "Out of office"})["_id"]), name="Provide alternative contact", description="Provide alternative contact information"),
-            UserNeed(category_id=str(categories_collection.find_one({"name": "Schedule call"})["_id"]), name="Propose time slots", description="Propose available time slots for a call"),
-            UserNeed(category_id=str(categories_collection.find_one({"name": "Request information"})["_id"]), name="Specific service details", description="Request details about specific services"),
-            UserNeed(category_id=str(categories_collection.find_one({"name": "Open to explore"})["_id"]), name="Further discussion", description="Express interest in further discussion"),
-        ]
-        user_needs_collection.insert_many([need.dict(by_alias=True, exclude_none=True) for need in initial_user_needs])
-
-
+    instruction_template = get_or_create_instruction_template(category.id, user_need.id)
+    if not instruction_template:
+        raise HTTPException(status_code=500, detail="Failed to create instruction template")
 
 def convert_to_serializable(data: Any) -> Any:
     """
@@ -338,8 +355,8 @@ async def fetch_emails(
     sort_direction = DESCENDING if order.lower() == "desc" else ASCENDING
 
     try:
-        total_emails = email_data_collection.count_documents({})
-        emails_cursor = email_data_collection.find({}) \
+        total_emails = email_collection.count_documents({})
+        emails_cursor = email_collection.find({}) \
             .sort(sort_by, sort_direction) \
             .skip(skip) \
             .limit(per_page)
@@ -369,7 +386,7 @@ async def fetch_email_by_id(email_id: str):
     Fetch an email from the email data collection by its ID (from_email field).
     """
     try:
-        email = email_data_collection.find_one({"from_email": email_id})
+        email = email_collection.find_one({"from_email": email_id})
         
         if email is None:
             raise HTTPException(status_code=404, detail=f"Email with ID {email_id} not found")
@@ -390,7 +407,7 @@ async def fetch_email_by_to_email(to_email: str):
     Fetch an email from the email data collection by its to_email field.
     """
     try:
-        email = email_data_collection.find_one({"to_email": to_email})
+        email = email_collection.find_one({"to_email": to_email})
         
         if email is None:
             raise HTTPException(status_code=404, detail=f"Email with to_email {to_email} not found")
@@ -417,7 +434,7 @@ async def update_email_status(doc_id: str, status: str = Query(..., description=
         object_id = ObjectId(doc_id)
 
         # Update the document
-        result = email_data_collection.update_one(
+        result = email_collection.update_one(
             {"_id": object_id},
             {"$set": {"status": status}}
         )
@@ -450,7 +467,7 @@ async def fetch_email_by_doc_id(doc_id: str):
         object_id = ObjectId(doc_id)
         
         # Find the document
-        email = email_data_collection.find_one({"_id": object_id})
+        email = email_collection.find_one({"_id": object_id})
         
         if email is None:
             raise HTTPException(status_code=404, detail=f"Email with ID {doc_id} not found")
@@ -510,7 +527,7 @@ async def fetch_email_classifications(
         sort_direction = DESCENDING if sort_order == "desc" else ASCENDING
 
         # Fetch email classifications
-        cursor = email_data_db["cases"].find().sort(sort_by, sort_direction).skip(skip).limit(limit)
+        cursor = db["cases"].find().sort(sort_by, sort_direction).skip(skip).limit(limit)
         
         # Convert cursor to list
         documents = list(cursor)
@@ -518,9 +535,9 @@ async def fetch_email_classifications(
         classifications = []
         for doc in documents:
             try:
-                user_need = email_data_db["user_needs"].find_one({"_id": ObjectId(doc["user_need_id"])})
-                category = email_data_db["categories"].find_one({"_id": ObjectId(doc["category_id"])})
-                instruction = email_data_db["instruction_templates"].find_one({"_id": ObjectId(doc["instruction_template_id"])})
+                user_need = db["user_needs"].find_one({"_id": ObjectId(doc["user_need_id"])})
+                category = db["categories"].find_one({"_id": ObjectId(doc["category_id"])})
+                instruction = db["instruction_templates"].find_one({"_id": ObjectId(doc["instruction_template_id"])})
                 
                 # Handle potential null values in the documents
                 user_need_response = UserNeedResponse(
@@ -571,14 +588,14 @@ async def fetch_single_case(case_id: str):
         object_id = ObjectId(case_id)
 
         # Fetch the case document from the email_data_db
-        doc = email_data_db["cases"].find_one({"_id": object_id})
+        doc = db["cases"].find_one({"_id": object_id})
 
         if doc is None:
             raise HTTPException(status_code=404, detail="Case not found")
 
-        user_need = email_data_db["user_needs"].find_one({"_id": ObjectId(doc["user_need_id"])})
-        category = email_data_db["categories"].find_one({"_id": ObjectId(doc["category_id"])})
-        instruction = email_data_db["instruction_templates"].find_one({"_id": ObjectId(doc["instruction_template_id"])})
+        user_need = db["user_needs"].find_one({"_id": ObjectId(doc["user_need_id"])})
+        category = db["categories"].find_one({"_id": ObjectId(doc["category_id"])})
+        instruction = db["instruction_templates"].find_one({"_id": ObjectId(doc["instruction_template_id"])})
 
         # Handle potential null values in the documents
         user_need_response = UserNeedResponse(
@@ -625,13 +642,13 @@ async def get_case_instruction(case_id: str):
         object_id = ObjectId(case_id)
 
         # Fetch the case document from the email_data_db
-        case = email_data_db["cases"].find_one({"_id": object_id})
+        case = db["cases"].find_one({"_id": object_id})
 
         if case is None:
             raise HTTPException(status_code=404, detail="Case not found")
 
         # Match instruction_template_id from the case with the _id in instruction_templates
-        instruction_template = email_data_db["instruction_templates"].find_one({
+        instruction_template = db["instruction_templates"].find_one({
             "_id": ObjectId(case["instruction_template_id"])
         })
 
@@ -654,13 +671,13 @@ async def update_case_instruction(case_id: str, instruction: str = Query(..., de
         object_id = ObjectId(case_id)
 
         # Fetch the case document from the email_data_db
-        case = email_data_db["cases"].find_one({"_id": object_id})
+        case = db["cases"].find_one({"_id": object_id})
 
         if case is None:
             raise HTTPException(status_code=404, detail="Case not found")
 
         # Update the instruction template in the instruction_templates collection
-        result = email_data_db["instruction_templates"].update_one(
+        result = db["instruction_templates"].update_one(
             {"_id": ObjectId(case["instruction_template_id"])},
             {"$set": {"template": instruction}}
         )
@@ -689,13 +706,13 @@ async def update_case_email_id(case_id: str, email_id: str = Query(..., descript
         object_id = ObjectId(case_id)
 
         # Fetch the case document from the email_data_db
-        case = email_data_db["cases"].find_one({"_id": object_id})
+        case = db["cases"].find_one({"_id": object_id})
 
         if case is None:
             raise HTTPException(status_code=404, detail="Case not found")
 
         # Update the email_id in the cases collection
-        result = email_data_db["cases"].update_one(
+        result = db["cases"].update_one(
             {"_id": object_id},
             {"$set": {"email_id": ObjectId(email_id)}}
         )
@@ -712,21 +729,17 @@ async def update_case_email_id(case_id: str, email_id: str = Query(..., descript
         raise HTTPException(status_code=500, detail=f"An error occurred while updating the case email ID: {str(e)}")
 
 
-class Category(BaseModel):
+class FetchCategory(BaseModel):
     id: str = Field(..., alias="_id")
     name: str
-    description: str
-    created_at: datetime
-    updated_at: datetime
-    is_custom: bool
 
-@app.get("/categories", response_model=List[Category])
+@app.get("/categories", response_model=List[FetchCategory])
 async def get_categories():
     """
     Fetch all categories from the database.
     """
     try:
-        categories = list(email_data_db["categories"].find())
+        categories = list(db["categories"].find())
         
         # Convert ObjectId to string for each category
         for category in categories:
@@ -736,13 +749,13 @@ async def get_categories():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching categories: {str(e)}")
 
-@app.get("/categories/{category_id}", response_model=Category)
+@app.get("/categories/{category_id}", response_model=FetchCategory)
 async def get_category_by_id(category_id: str):
     """
     Fetch a specific category by its ID from the database.
     """
     try:
-        category = email_data_db["categories"].find_one({"_id": ObjectId(category_id)})
+        category = db["categories"].find_one({"_id": ObjectId(category_id)})
         
         if category is None:
             raise HTTPException(status_code=404, detail="Category not found")
@@ -761,33 +774,35 @@ class UserNeedWithCategory(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_custom: bool
-    category: Category
+    category: FetchCategory
 
 @app.get("/user-needs", response_model=List[UserNeedWithCategory])
 async def get_user_needs():
     """
-    Fetch all user needs from the database, including their associated category details.
+    Fetch all user needs from the database, including their associated categories.
     """
     try:
-        user_needs = list(email_data_db["user_needs"].find())
+        user_needs = list(db["user_needs"].find())
         
         result = []
         for user_need in user_needs:
+            # Fetch the associated category
+            category = db["categories"].find_one({"_id": user_need["category_id"]})
+            
             # Convert ObjectId to string
             user_need["_id"] = str(user_need["_id"])
             
-            # Fetch the associated category
-            category = email_data_db["categories"].find_one({"_id": ObjectId(user_need["category_id"])})
-            
-            if category:
-                # Convert category ObjectId to string
-                category["_id"] = str(category["_id"])
-                user_need["category"] = Category(**category)
-            else:
-                # If category not found, set it to None
-                user_need["category"] = None
-            
-            result.append(UserNeedWithCategory(**user_need))
+            # Create UserNeedWithCategory object
+            user_need_with_category = UserNeedWithCategory(
+                _id=user_need["_id"],  # Use '_id' instead of 'id'
+                name=user_need["name"],
+                description=user_need["description"],
+                created_at=user_need["created_at"],
+                updated_at=user_need["updated_at"],
+                is_custom=user_need["is_custom"],
+                category=FetchCategory(_id="not found", name="not found") if not category else FetchCategory(_id=str(category["_id"]), name=category["name"])
+            )
+            result.append(user_need_with_category)
         
         return result
     except Exception as e:
@@ -796,31 +811,35 @@ async def get_user_needs():
 @app.get("/user-needs/{user_need_id}", response_model=UserNeedWithCategory)
 async def get_user_need_by_id(user_need_id: str):
     """
-    Fetch a specific user need by its ID from the database, including its associated category details.
+    Fetch a specific user need by its ID from the database, including its associated category.
     """
     try:
-        user_need = email_data_db["user_needs"].find_one({"_id": ObjectId(user_need_id)})
+        user_need = db["user_needs"].find_one({"_id": ObjectId(user_need_id)})
         
         if user_need is None:
             raise HTTPException(status_code=404, detail="User need not found")
         
+        # Fetch the associated category
+        category = db["categories"].find_one({"_id": user_need["category_id"]})
+        
         # Convert ObjectId to string
         user_need["_id"] = str(user_need["_id"])
         
-        # Fetch the associated category
-        category = email_data_db["categories"].find_one({"_id": ObjectId(user_need["category_id"])})
+        # Create UserNeedWithCategory object
+        user_need_with_category = UserNeedWithCategory(
+            _id=user_need["_id"],
+            name=user_need["name"],
+            description=user_need["description"],
+            created_at=user_need["created_at"],
+            updated_at=user_need["updated_at"],
+            is_custom=user_need["is_custom"],
+            category=FetchCategory(_id="not found", name="not found") if not category else FetchCategory(_id=str(category["_id"]), name=category["name"])
+        )
         
-        if category:
-            # Convert category ObjectId to string
-            category["_id"] = str(category["_id"])
-            user_need["category"] = Category(**category)
-        else:
-            # If category not found, set it to None
-            user_need["category"] = None
-        
-        return UserNeedWithCategory(**user_need)
+        return user_need_with_category
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching the user need: {str(e)}")
+
 
 
 
@@ -905,6 +924,5 @@ async def root():
 
 
 if __name__ == "__main__":
-    init_db()
     import uvicorn
     uvicorn.run(app, host="0.0.0.0")
